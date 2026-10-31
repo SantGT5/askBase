@@ -78,6 +78,10 @@ class AskIn(Schema):
     mode = String(load_default="similarity", validate=OneOf(rag.SEARCH_MODES), metadata={"description": "Search type"})
 
 
+def without_nul(s):
+    return s.replace("\x00", "")  # Postgres text can't store NUL bytes, and some PDFs extract them
+
+
 @app.post("/auth/register")
 @app.input(Credentials)
 @app.output(Message, status_code=201)
@@ -111,9 +115,10 @@ def login(json_data):
 @app.input(TextIn)
 @app.output(DocumentOut, status_code=201)
 def add_text(json_data):
-    if not json_data["text"].strip():
+    text = without_nul(json_data["text"])
+    if not text.strip():
         abort(400, "Text is empty")
-    return rag.add_document(auth.current_user["id"], json_data["title"], json_data["text"], "text")
+    return rag.add_document(auth.current_user["id"], without_nul(json_data["title"]), text, "text")
 
 
 @app.post("/documents/upload")
@@ -132,9 +137,10 @@ def upload(files_data):
             abort(400, "Only .pdf and .md files are supported")
     except (PyPdfError, UnicodeDecodeError):
         abort(400, "Could not read the file")
+    text = without_nul(text)
     if not text.strip():
         abort(400, "No text found in the file (scanned PDFs need OCR)")
-    return rag.add_document(auth.current_user["id"], file.filename, text, ext[1:])
+    return rag.add_document(auth.current_user["id"], without_nul(file.filename), text, ext[1:])
 
 
 @app.post("/ask")

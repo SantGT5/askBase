@@ -141,7 +141,7 @@ def chunk_text(text):
 
 def add_document(user_id, title, text, source):
     chunks = chunk_text(text)
-    vectors = embedder().embed(chunks)
+    vectors = list(embedder().embed(chunks))  # embed() is lazy: finish it before the transaction opens
     with connect() as conn:
         doc_id = conn.execute(
             "INSERT INTO documents (user_id, title, source) VALUES (%s, %s, %s) RETURNING id",

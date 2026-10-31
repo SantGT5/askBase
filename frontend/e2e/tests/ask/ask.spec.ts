@@ -215,6 +215,60 @@ test.describe("Ask", () => {
     await expect(page.getByText("Kept answer.")).toBeVisible()
   })
 
+  test("coming back from Add context lands at the bottom of a long chat", async ({
+    home,
+    page,
+  }) => {
+    await page.route("**/api/ask", route => route.fulfill(streamed("Long answer. ".repeat(200))))
+
+    for (const n of [1, 2, 3]) {
+      await home.ask(`Question ${n}`)
+      await expect(page.getByText(`Question ${n}`)).toBeVisible()
+      await expect(home.askButton()).toBeEnabled()
+    }
+
+    await home.addContextLink().click()
+    await expect(home.titleInput()).toBeVisible()
+    await home.askLink().click()
+    await expect(home.questionInput()).toBeVisible() // the Ask page is back, so the page is long again
+
+    const distanceToBottom = () =>
+      page.evaluate(() => document.body.scrollHeight - window.innerHeight - window.scrollY)
+
+    await expect.poll(distanceToBottom).toBeLessThan(2)
+    await expect(page.getByText("Question 1")).not.toBeInViewport()
+  })
+
+  test("does not pull the user down while they read earlier answers", async ({ home, page }) => {
+    let release!: () => void
+    const waiting = new Promise<void>(r => (release = r))
+    let calls = 0
+
+    await page.route("**/api/ask", async route => {
+      if (++calls === 3) await waiting
+      await route.fulfill(streamed(`Answer ${calls}. ` + "More text. ".repeat(200)))
+    })
+
+    await home.ask("Question 1")
+    await expect(home.askButton()).toBeEnabled()
+    await home.ask("Question 2")
+    await expect(home.askButton()).toBeEnabled()
+    await home.ask("Question 3")
+    await expect(page.getByText("Searching your documents…")).toBeVisible()
+
+    // Scroll up to re-read the first answer. Not mouse.wheel: its smooth animation would hide a jump down.
+    // Two frames let the scroll event fire before the answer arrives.
+    await page.evaluate(() => {
+      window.scrollTo(0, 0)
+
+      return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+    })
+    release()
+
+    await expect(home.askButton()).toBeEnabled()
+    await expect(page.getByText("Question 1")).toBeInViewport() // the answer arrived without moving the page
+  })
+
   test("Enter adds a line and Ctrl+Enter sends a multi-line question", async ({ home, page }) => {
     let sent: Sent | undefined
 

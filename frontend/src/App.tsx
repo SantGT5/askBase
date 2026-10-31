@@ -26,6 +26,11 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHashChange)
   }, [])
 
+  // Coming back to Ask lands on the latest message, not the top of a long chat
+  useEffect(() => {
+    if (page === "ask") window.scrollTo({ top: document.body.scrollHeight })
+  }, [page])
+
   function login(next: string | null) {
     setToken(next)
     setTokenState(next)

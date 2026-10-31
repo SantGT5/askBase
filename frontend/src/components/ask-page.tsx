@@ -1,6 +1,6 @@
 import { ArrowUp, ChevronDown, Loader2, Plus, Search } from "lucide-react"
 
-import { type FormEvent, type KeyboardEvent, useEffect, useState } from "react"
+import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -50,9 +50,22 @@ export function AskPage({ onError }: { onError: (err: unknown) => string }) {
   const [mode, setMode] = useState<SearchMode>("similarity")
   const modeLabel = SEARCH_MODES.find(m => m.value === mode)?.label
 
-  // Follow the answer as it streams in
+  // Whether the user is at the bottom. Only scrolling changes it, so content growing below keeps it true.
+  const atBottom = useRef(true)
+
   useEffect(() => {
-    if (chat.length) window.scrollTo({ top: document.body.scrollHeight })
+    const onScroll = () => {
+      atBottom.current = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80
+    }
+
+    window.addEventListener("scroll", onScroll)
+
+    return () => window.removeEventListener("scroll", onScroll)
+  }, [])
+
+  // Follow the answer as it streams in, unless the user scrolled up to read something
+  useEffect(() => {
+    if (chat.length && atBottom.current) window.scrollTo({ top: document.body.scrollHeight })
   }, [chat])
 
   async function submit(e: FormEvent<HTMLFormElement>) {
@@ -70,6 +83,7 @@ export function AskPage({ onError }: { onError: (err: unknown) => string }) {
     const updateLast = (change: (x: Exchange) => Exchange) =>
       setChat(c => [...c.slice(0, -1), change(c[c.length - 1])])
 
+    atBottom.current = true // a new question always jumps down to it
     setChat(c => [...c, { question, answer: "", sources: [], done: false }])
     setDraft("")
     setBusy(true)
