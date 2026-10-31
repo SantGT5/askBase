@@ -6,7 +6,7 @@ import openai
 import psycopg
 from apiflask import APIFlask, HTTPTokenAuth, Schema, abort
 from apiflask.fields import File, Integer, List, Nested, String
-from apiflask.validators import Email, Length
+from apiflask.validators import Email, Length, OneOf
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
@@ -62,8 +62,16 @@ class DocumentOut(Schema):
     chunks = Integer()
 
 
+class Turn(Schema):
+    role = String(required=True, validate=OneOf(["human", "ai"]))
+    content = String(required=True, validate=Length(max=20000))
+
+
 class AskIn(Schema):
     question = String(required=True, validate=Length(1, 2000))
+    # The chat so far, oldest first. The browser holds it, so "New chat" is just sending an empty list.
+    # Capped because every turn is re-sent to the paid LLM on each question.
+    history = List(Nested(Turn), load_default=[], validate=Length(max=20))
 
 
 class Source(Schema):
@@ -144,6 +152,6 @@ def ask(json_data):
     if not os.environ.get("LLM_API_KEY"):
         abort(503, f"LLM_API_KEY is not set in .env (LLM_PROVIDER={rag.LLM_PROVIDER})")
     try:
-        return rag.answer(auth.current_user["id"], json_data["question"])
+        return rag.answer(auth.current_user["id"], json_data["question"], json_data["history"])
     except (anthropic.APIError, openai.APIError) as e:  # both SDKs already retried rate limits and 5xx
         abort(502, f"{rag.LLM_PROVIDER} API error: {e}")

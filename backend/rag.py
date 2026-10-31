@@ -1,11 +1,14 @@
-"""The RAG pipeline. Ingest: chunk -> embed -> store. Ask: embed question -> nearest chunks -> LLM."""
+"""The RAG pipeline. Ingest: chunk -> embed -> store.
+Ask: (follow-up? rewrite it as a standalone question) -> embed -> nearest chunks -> LLM with the chat history."""
 import os
 from functools import cache
 
-import anthropic
-import openai
 import psycopg
 from fastembed import TextEmbedding
+from langchain_anthropic import ChatAnthropic
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_openai import ChatOpenAI
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pgvector.psycopg import register_vector
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"  # 384 dims, must match vector(384) in db/init.sql
@@ -36,6 +39,31 @@ SYSTEM_PROMPT = (
 )
 DECLINED = "The model declined to answer this question."
 
+# {context} and {question} are filled in per request; "history" is the earlier turns of the chat, inserted as real messages
+PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", SYSTEM_PROMPT),
+        MessagesPlaceholder("history"),
+        ("human", "<context>\n{context}\n</context>\n\nQuestion: {question}"),
+    ]
+)
+
+# "And what was my role there?" has nothing to search with, so follow-ups are rewritten before retrieval
+REWRITE_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Rewrite the user's last question as a standalone question that can be understood without the chat history. "
+            "Keep it in the first person. Return only the rewritten question, or the question unchanged if it already stands alone.",
+        ),
+        MessagesPlaceholder("history"),
+        ("human", "{question}"),
+    ]
+)
+
+# Tries paragraphs, then lines, then words, so chunks rarely cut a sentence in half
+SPLITTER = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+
 
 def connect():
     # shortcut: new connection per call, switch to psycopg_pool if requests get slow
@@ -51,16 +79,22 @@ def embedder():
 
 @cache
 def llm():
+    """One LangChain chat model whatever the provider, so the rest of the code doesn't care which it is."""
+    api_key = os.environ["LLM_API_KEY"]
     base_url = PROVIDERS[LLM_PROVIDER]["base_url"]
     if base_url is None:
-        return anthropic.Anthropic(api_key=os.environ["LLM_API_KEY"])
-    return openai.OpenAI(api_key=os.environ["LLM_API_KEY"], base_url=base_url)
+        # model_kwargs go straight into the Anthropic request
+        fallback = (
+            {"betas": ["server-side-fallback-2026-07-01"], "model_kwargs": {"fallbacks": "default"}}
+            if LLM_MODEL in CLAUDE_FALLBACK_MODELS
+            else {}
+        )
+        return ChatAnthropic(model=LLM_MODEL, api_key=api_key, max_tokens=16000, **fallback)
+    return ChatOpenAI(model=LLM_MODEL, api_key=api_key, base_url=base_url)
 
 
-def chunk_text(text, size=1000, overlap=200):
-    # shortcut: fixed character windows can cut mid-sentence, split on paragraphs/headings if answers miss context
-    text = text.strip()
-    return [text[i : i + size] for i in range(0, max(len(text) - overlap, 1), size - overlap)]
+def chunk_text(text):
+    return SPLITTER.split_text(text)
 
 
 def add_document(user_id, title, text, source):
@@ -91,36 +125,29 @@ def retrieve(user_id, question):
         ).fetchall()
 
 
-def ask_claude(prompt):
-    fallback = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"} if LLM_MODEL in CLAUDE_FALLBACK_MODELS else {}
-    response = llm().beta.messages.create(
-        model=LLM_MODEL,
-        max_tokens=16000,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-        **fallback,
-    )
-    if response.stop_reason == "refusal":
+def standalone_question(question, history):
+    if not history:
+        return question
+    rewritten = (REWRITE_PROMPT | llm()).invoke({"history": history, "question": question}).text.strip()
+    return rewritten or question  # empty (e.g. a refusal): search with the original wording
+
+
+def ask_llm(context, question, history=()):
+    chain = PROMPT | llm()  # LCEL: the prompt's output (messages) is piped into the model
+    message = chain.invoke({"context": context, "question": question, "history": list(history)})
+    meta = message.response_metadata  # the provider's raw stop info: Anthropic says stop_reason, OpenAI-format says finish_reason
+    if meta.get("stop_reason") == "refusal" or meta.get("finish_reason") in ("content_filter", "sensitive"):  # "sensitive" is GLM's
         return DECLINED
-    return "".join(block.text for block in response.content if block.type == "text")
+    return message.text
 
 
-def ask_openai_format(prompt):
-    choice = llm().chat.completions.create(
-        model=LLM_MODEL,
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-    ).choices[0]
-    if choice.finish_reason in ("content_filter", "sensitive"):  # "sensitive" is GLM's name for it
-        return DECLINED
-    return choice.message.content or ""
-
-
-def answer(user_id, question):
-    sources = [{"n": n, "title": title, "content": content} for n, (title, content) in enumerate(retrieve(user_id, question), 1)]
+def answer(user_id, question, history=()):
+    """history: earlier turns, oldest first, as [{"role": "human" | "ai", "content": "..."}]."""
+    history = [(turn["role"], turn["content"]) for turn in history]  # LangChain reads (role, text) tuples as messages
+    search = standalone_question(question, history)
+    sources = [{"n": n, "title": title, "content": content} for n, (title, content) in enumerate(retrieve(user_id, search), 1)]
     if not sources:
         return {"answer": "You have no documents yet. Add some first.", "sources": []}
 
     context = "\n\n".join(f"[{s['n']}] {s['title']}\n{s['content']}" for s in sources)
-    prompt = f"<context>\n{context}\n</context>\n\nQuestion: {question}"
-    text = ask_claude(prompt) if LLM_PROVIDER == "claude" else ask_openai_format(prompt)
-    return {"answer": text, "sources": sources}
+    return {"answer": ask_llm(context, question, history), "sources": sources}

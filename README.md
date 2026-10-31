@@ -7,8 +7,9 @@ Each user only ever searches their own documents.
 ## How it works
 
 ```
-Add document  → split into 1000-char chunks (200 overlap) → embed → store in Postgres (pgvector)
-Ask question  → embed → 5 nearest chunks → LLM writes the answer, citing [1], [2], ...
+Add document  → split into ~1000-char chunks on paragraph/line/word boundaries (200 overlap) → embed → store in Postgres (pgvector)
+Ask question  → (follow-up? LLM rewrites it as a standalone question) → embed → 5 nearest chunks
+              → LLM writes the answer from the chunks + chat history, citing [1], [2], ...
 ```
 
 - **Embeddings** run locally with [fastembed](https://github.com/qdrant/fastembed) (`BAAI/bge-small-en-v1.5`, 384 dims). The model downloads on first use.
@@ -87,7 +88,9 @@ Swagger UI is at http://127.0.0.1:5001/docs. All routes except auth need `Author
 | POST   | `/auth/login`       | `{email, password}` → `{token}`              |
 | POST   | `/documents/text`   | `{title, text}`                              |
 | POST   | `/documents/upload` | multipart `file` (`.pdf` / `.md`, max 10 MB) |
-| POST   | `/ask`              | `{question}` → `{answer, sources}`           |
+| POST   | `/ask`              | `{question, history?}` → `{answer, sources}` |
+
+`history` is the chat so far, oldest first: `[{role: "human" | "ai", content}]`, at most 20 turns. The browser keeps it, so "New chat" (or a page reload) starts with an empty one.
 
 Scanned PDFs have no text layer and are rejected (no OCR).
 

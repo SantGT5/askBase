@@ -52,3 +52,4 @@ export async function post<T>(path: string, body: object | FormData): Promise<T>
 export type Document = { id: number; title: string; chunks: number }
 export type Source = { n: number; title: string; content: string }
 export type Answer = { answer: string; sources: Source[] }
+export type Turn = { role: "human" | "ai"; content: string }

@@ -38,6 +38,7 @@ export class HomePage {
   // Ask card
   questionInput = () => this.page.getByLabel("Question")
   askButton = () => this.page.getByRole("button", { name: "Ask", exact: true })
+  newChatButton = () => this.page.getByRole("button", { name: "New chat" })
   askError = () => this.page.getByRole("alert")
   sources = () => this.page.getByRole("listitem")
 
