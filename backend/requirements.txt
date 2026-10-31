@@ -1,0 +1,8 @@
+apiflask==3.1.2
+python-dotenv==1.2.4
+psycopg[binary]==3.3.6
+pgvector==0.5.1
+fastembed==0.9.1
+pypdf==6.21.4
+anthropic==2.3.0
+openai==3.42.0
