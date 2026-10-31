@@ -51,6 +51,7 @@ url:
 	@echo "Swagger UI    $(BACKEND)/docs"
 	@echo "OpenAPI spec  $(BACKEND)/openapi.json"
 	@echo "Backend API   $(BACKEND)"
+	@echo "LangSmith     $(if $(findstring eu.,$(LANGSMITH_ENDPOINT)),https://eu.smith.langchain.com,https://smith.langchain.com)  (project: $(or $(LANGSMITH_PROJECT),askbase), tracing: $(or $(LANGSMITH_TRACING),false))"
 	@echo "Postgres      postgresql://$(POSTGRES_USER):<password>@localhost:$(or $(POSTGRES_PORT),5432)/$(POSTGRES_DB)"
 
 format:

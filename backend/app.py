@@ -1,12 +1,15 @@
 """HTTP API. Run: flask --app app run (from backend/). Swagger UI at /docs."""
+import itertools
+import json
 import os
 
 import anthropic
 import openai
 import psycopg
 from apiflask import APIFlask, HTTPTokenAuth, Schema, abort
+from flask import Response
 from apiflask.fields import File, Integer, List, Nested, String
-from apiflask.validators import Email, Length
+from apiflask.validators import Email, Length, OneOf
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
@@ -62,19 +65,21 @@ class DocumentOut(Schema):
     chunks = Integer()
 
 
+class Turn(Schema):
+    role = String(required=True, validate=OneOf(["human", "ai"]))
+    content = String(required=True, validate=Length(max=20000))
+
+
 class AskIn(Schema):
     question = String(required=True, validate=Length(1, 2000))
+    # The chat so far, oldest first. The browser holds it, so "New chat" is just sending an empty list.
+    # Capped because every turn is re-sent to the paid LLM on each question.
+    history = List(Nested(Turn), load_default=[], validate=Length(max=20))
+    mode = String(load_default="similarity", validate=OneOf(rag.SEARCH_MODES), metadata={"description": "Search type"})
 
 
-class Source(Schema):
-    n = Integer()
-    title = String()
-    content = String()
-
-
-class AskOut(Schema):
-    answer = String()
-    sources = List(Nested(Source))
+def without_nul(s):
+    return s.replace("\x00", "")  # Postgres text can't store NUL bytes, and some PDFs extract them
 
 
 @app.post("/auth/register")
@@ -110,9 +115,10 @@ def login(json_data):
 @app.input(TextIn)
 @app.output(DocumentOut, status_code=201)
 def add_text(json_data):
-    if not json_data["text"].strip():
+    text = without_nul(json_data["text"])
+    if not text.strip():
         abort(400, "Text is empty")
-    return rag.add_document(auth.current_user["id"], json_data["title"], json_data["text"], "text")
+    return rag.add_document(auth.current_user["id"], without_nul(json_data["title"]), text, "text")
 
 
 @app.post("/documents/upload")
@@ -131,19 +137,35 @@ def upload(files_data):
             abort(400, "Only .pdf and .md files are supported")
     except (PyPdfError, UnicodeDecodeError):
         abort(400, "Could not read the file")
+    text = without_nul(text)
     if not text.strip():
         abort(400, "No text found in the file (scanned PDFs need OCR)")
-    return rag.add_document(auth.current_user["id"], file.filename, text, ext[1:])
+    return rag.add_document(auth.current_user["id"], without_nul(file.filename), text, ext[1:])
 
 
 @app.post("/ask")
 @app.auth_required(auth)
 @app.input(AskIn)
-@app.output(AskOut)
+@app.doc(
+    description="Streams newline-delimited JSON (application/x-ndjson): "
+    '{"type": "token", "text"} pieces of the answer, then {"type": "done", "sources"} with the passages it cited, '
+    'or {"type": "error", "message"} if the LLM fails mid-answer.'
+)
 def ask(json_data):
     if not os.environ.get("LLM_API_KEY"):
         abort(503, f"LLM_API_KEY is not set in .env (LLM_PROVIDER={rag.LLM_PROVIDER})")
+    llm_errors = (anthropic.APIError, openai.APIError)  # both SDKs already retried rate limits and 5xx
     try:
-        return rag.answer(auth.current_user["id"], json_data["question"])
-    except (anthropic.APIError, openai.APIError) as e:  # both SDKs already retried rate limits and 5xx
+        events = rag.answer_stream(auth.current_user["id"], json_data["question"], json_data["history"], json_data["mode"])
+        first = next(events)  # starts the answer here, so a bad key or rate limit is still a normal HTTP error
+    except llm_errors as e:
         abort(502, f"{rag.LLM_PROVIDER} API error: {e}")
+
+    def ndjson():
+        try:
+            for event in itertools.chain([first], events):
+                yield json.dumps(event) + "\n"
+        except llm_errors as e:  # the 200 status is already sent, so the error goes in the stream
+            yield json.dumps({"type": "error", "message": f"{rag.LLM_PROVIDER} API error: {e}"}) + "\n"
+
+    return Response(ndjson(), mimetype="application/x-ndjson")
