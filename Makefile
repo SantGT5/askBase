@@ -1,4 +1,4 @@
-.PHONY: install start stop test url
+.PHONY: install start stop test url test-unit e2e e2e-ui e2e-headed e2e-report
 
 PY := backend/.venv/bin/python
 
@@ -25,6 +25,26 @@ stop:
 
 test:
 	docker compose run --rm --no-deps --build backend python test_rag.py
+
+# Frontend unit tests (Vitest), no running app needed. Watch mode: cd frontend && npm run test:watch
+test-unit:
+	cd frontend && npm test
+
+# Browser tests (Playwright) against the running app, so `make start` first. Filter: make e2e ARGS="-g login"
+e2e:
+	cd frontend && npx playwright install chromium && npx playwright test $(ARGS)
+
+# Same tests in Playwright's interactive UI (watch, step through, time-travel)
+e2e-ui:
+	cd frontend && npx playwright test --ui
+
+# Watch a real browser click through the tests, one at a time and slowed down. Faster: make e2e-headed SLOWMO=200
+e2e-headed:
+	cd frontend && SLOWMO=$(or $(SLOWMO),500) npx playwright test --headed --workers=1 $(ARGS)
+
+# Opens the HTML report of the last run
+e2e-report:
+	cd frontend && npx playwright show-report
 
 url:
 	@echo "Frontend      http://127.0.0.1:$(or $(FRONTEND_PORT),5173)"

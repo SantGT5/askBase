@@ -21,6 +21,10 @@ dist-ssr/
 *.local
 *.log
 
+# Playwright
+test-results/
+playwright-report/
+
 # AI
 .agents
 .claude
