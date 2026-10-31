@@ -1,9 +1,11 @@
 """Run: python test_rag.py"""
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableGenerator, RunnableLambda
 
 import rag
-from rag import DECLINED, chunk_text
+from rag import DECLINED, NO_DOCUMENTS, chunk_text, fuse
 
 # --- chunking (LangChain RecursiveCharacterTextSplitter) ---
 assert chunk_text("") == []  # app.py rejects empty text before it gets here
@@ -20,50 +22,95 @@ assert chunks[0][-200:] == chunks[1][:200]  # neighbours overlap so a sentence o
 assert chunks[-1].endswith(text[-200:])  # nothing dropped at the end
 
 
-# --- answering (prompt | model chain), with a fake model instead of a real API ---
-def ask_with(message):
-    rag.llm = lambda: GenericFakeChatModel(messages=iter([message]))
-    return rag.ask_llm("[1] cv\nI worked at Acme", "Where did I work?")
+# --- reciprocal rank fusion ---
+a, b, c, d = (1, "t", "A"), (2, "t", "B"), (3, "t", "C"), (4, "t", "D")
+assert fuse([a, b, c]) == [("t", "A"), ("t", "B"), ("t", "C")]  # one list keeps its order
+assert fuse([a, b, c], [c, d])[0] == ("t", "C")  # found by both searches beats rank 1 of only one
+assert len(fuse([(i, "t", str(i)) for i in range(9)])) == rag.TOP_K
+assert fuse() == []
 
 
-assert ask_with(AIMessage("You worked at Acme [1].")) == "You worked at Acme [1]."
-assert ask_with(AIMessage("", response_metadata={"stop_reason": "refusal"})) == DECLINED  # Claude
-assert ask_with(AIMessage("", response_metadata={"finish_reason": "content_filter"})) == DECLINED  # OpenAI format
-assert ask_with(AIMessage("", response_metadata={"finish_reason": "sensitive"})) == DECLINED  # GLM
+# --- search modes, with fake searches instead of Postgres ---
+calls = []
+rag.vector_search = lambda user_id, q: calls.append(("vector", q)) or [(hash(q), "t", q)]
+rag.text_search = lambda user_id, q: calls.append(("text", q)) or [(hash(q), "t", q)]
+rag.structured = lambda schema: RunnableLambda(lambda _: {"queries": ["alt one", "alt two", "", 5, "alt three", "alt four"]})
 
-messages = rag.PROMPT.invoke({"context": "CTX", "question": "Q", "history": []}).to_messages()
-assert [m.type for m in messages] == ["system", "human"]
-assert "CTX" in messages[1].content and messages[1].content.endswith("Question: Q")
+calls.clear()
+rag.retrieve(7, "Q")
+assert calls == [("vector", "Q")]
+
+calls.clear()
+rag.retrieve(7, "Q", "hybrid")
+assert calls == [("vector", "Q"), ("text", "Q")]
+
+calls.clear()
+rag.retrieve(7, "Q", "multi_query")
+assert calls == [("vector", q) for q in ["Q", "alt one", "alt two", "alt three"]]  # junk dropped, capped at 3
 
 
-# --- chat memory: follow-ups are rewritten for search, and the history reaches the answer prompt ---
-class RecordingModel(GenericFakeChatModel):
-    def _generate(self, messages, *args, **kwargs):
-        prompts.append(messages)
-        return super()._generate(messages, *args, **kwargs)
+def bad_json(_):
+    raise OutputParserException("not json")
 
 
-def answer_with(replies, history):
+rag.structured = lambda schema: RunnableLambda(bad_json)
+calls.clear()
+rag.retrieve(7, "Q", "multi_query")
+assert calls == [("vector", "Q")]  # malformed query list: falls back to the question alone
+
+
+# --- streaming the answer: the fake model streams growing dicts like with_structured_output does ---
+prompts, searched = [], []
+SOURCES = [("cv", "Engineer at Acme"), ("notes", "Likes hiking"), ("cv", "Studied in Porto")]
+rag.retrieve = lambda user_id, q, mode="similarity": searched.append((q, mode)) or SOURCES
+
+
+def streams(*parts, fail=False):
+    def generate(inputs):
+        for prompt in inputs:
+            prompts.append(prompt.to_messages())
+        yield from parts
+        if fail:
+            raise OutputParserException("cut off")
+
+    return lambda schema: RunnableGenerator(generate)
+
+
+def run(history=(), mode="similarity", rewrite="And my role there?"):
     prompts.clear()
     searched.clear()
-    model = RecordingModel(messages=iter(AIMessage(r) for r in replies))  # one model, so replies come in order
-    rag.llm = lambda: model
-    return rag.answer(7, "And my role there?", history)
+    rag.llm = lambda: GenericFakeChatModel(messages=iter([AIMessage(rewrite)]))
+    events = list(rag.answer_stream(7, "And my role there?", history, mode))
+    text = "".join(e["text"] for e in events if e["type"] == "token")
+    return text, events[-1]
 
 
-prompts, searched = [], []
-rag.retrieve = lambda user_id, question: searched.append(question) or [("cv", "Engineer at Acme")]
+rag.structured = streams({"answer": "You"}, {"answer": "You were"}, {"answer": "You were an engineer [1]."},
+                         {"answer": "You were an engineer [1].", "cited": [1]}, {"answer": "You were an engineer [1].", "cited": [1, 3]})
+text, done = run()
+assert text == "You were an engineer [1]."  # pieces add up to the full answer, nothing repeated
+assert done == {"type": "done", "sources": [{"n": 1, "title": "cv", "content": "Engineer at Acme"},
+                                            {"n": 3, "title": "cv", "content": "Studied in Porto"}]}  # only the cited ones
+assert searched == [("And my role there?", "similarity")]
+
 history = [{"role": "human", "content": "Where did I work?"}, {"role": "ai", "content": "At Acme [1]."}]
+run(history, "hybrid", rewrite="What was my role at Acme?")
+assert searched == [("What was my role at Acme?", "hybrid")]  # follow-up rewritten before searching, mode passed on
+assert [m.type for m in prompts[0]] == ["system", "human", "ai", "human"]  # the earlier turns reached the answer prompt
+assert prompts[0][3].content.endswith("Question: And my role there?")
 
-result = answer_with(["What was my role at Acme?", "You were an engineer [1]."], history)
-assert result["answer"] == "You were an engineer [1]."
-assert searched == ["What was my role at Acme?"]  # retrieval used the standalone question, not "there"
-assert [m.type for m in prompts[1]] == ["system", "human", "ai", "human"]  # the earlier turns came along
-assert prompts[1][1].content == "Where did I work?" and prompts[1][3].content.endswith("Question: And my role there?")
+run(history, rewrite="")
+assert searched == [("And my role there?", "similarity")]  # an empty rewrite falls back to the original wording
 
-answer_with(["You were an engineer [1]."], [])
-assert len(prompts) == 1 and searched == ["And my role there?"]  # first question of a chat: no rewrite call
+rag.structured = streams({}, {"answer": ""})
+assert run() == (DECLINED, {"type": "done", "sources": []})  # refusal / content filter: nothing written
 
-answer_with(["", "Engineer [1]."], history)
-assert searched == ["And my role there?"]  # an empty rewrite falls back to the original wording
+rag.structured = streams({"answer": "You were"}, fail=True)
+assert run() == ("You were", {"type": "done", "sources": []})  # broken JSON midway keeps what was written
+
+rag.structured = streams({"answer": "Hi", "cited": [99, "1", [2]]})
+assert run()[1]["sources"] == []  # cited numbers that aren't real passages are ignored
+
+rag.retrieve = lambda user_id, q, mode="similarity": []
+assert run() == (NO_DOCUMENTS, {"type": "done", "sources": []})
 print("ok")

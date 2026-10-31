@@ -1,10 +1,13 @@
 """HTTP API. Run: flask --app app run (from backend/). Swagger UI at /docs."""
+import itertools
+import json
 import os
 
 import anthropic
 import openai
 import psycopg
 from apiflask import APIFlask, HTTPTokenAuth, Schema, abort
+from flask import Response
 from apiflask.fields import File, Integer, List, Nested, String
 from apiflask.validators import Email, Length, OneOf
 from itsdangerous import BadSignature, URLSafeTimedSerializer
@@ -72,17 +75,7 @@ class AskIn(Schema):
     # The chat so far, oldest first. The browser holds it, so "New chat" is just sending an empty list.
     # Capped because every turn is re-sent to the paid LLM on each question.
     history = List(Nested(Turn), load_default=[], validate=Length(max=20))
-
-
-class Source(Schema):
-    n = Integer()
-    title = String()
-    content = String()
-
-
-class AskOut(Schema):
-    answer = String()
-    sources = List(Nested(Source))
+    mode = String(load_default="similarity", validate=OneOf(rag.SEARCH_MODES), metadata={"description": "Search type"})
 
 
 @app.post("/auth/register")
@@ -147,11 +140,26 @@ def upload(files_data):
 @app.post("/ask")
 @app.auth_required(auth)
 @app.input(AskIn)
-@app.output(AskOut)
+@app.doc(
+    description="Streams newline-delimited JSON (application/x-ndjson): "
+    '{"type": "token", "text"} pieces of the answer, then {"type": "done", "sources"} with the passages it cited, '
+    'or {"type": "error", "message"} if the LLM fails mid-answer.'
+)
 def ask(json_data):
     if not os.environ.get("LLM_API_KEY"):
         abort(503, f"LLM_API_KEY is not set in .env (LLM_PROVIDER={rag.LLM_PROVIDER})")
+    llm_errors = (anthropic.APIError, openai.APIError)  # both SDKs already retried rate limits and 5xx
     try:
-        return rag.answer(auth.current_user["id"], json_data["question"], json_data["history"])
-    except (anthropic.APIError, openai.APIError) as e:  # both SDKs already retried rate limits and 5xx
+        events = rag.answer_stream(auth.current_user["id"], json_data["question"], json_data["history"], json_data["mode"])
+        first = next(events)  # starts the answer here, so a bad key or rate limit is still a normal HTTP error
+    except llm_errors as e:
         abort(502, f"{rag.LLM_PROVIDER} API error: {e}")
+
+    def ndjson():
+        try:
+            for event in itertools.chain([first], events):
+                yield json.dumps(event) + "\n"
+        except llm_errors as e:  # the 200 status is already sent, so the error goes in the stream
+            yield json.dumps({"type": "error", "message": f"{rag.LLM_PROVIDER} API error: {e}"}) + "\n"
+
+    return Response(ndjson(), mimetype="application/x-ndjson")

@@ -31,10 +31,11 @@ function errorMessage(body: ErrorBody, status: number) {
   return body.message ?? `Request failed (${status})`
 }
 
-export async function post<T>(path: string, body: object | FormData): Promise<T> {
+function send(path: string, body: object | FormData) {
   const token = getToken()
   const isForm = body instanceof FormData
-  const res = await fetch(`/api${path}`, {
+
+  return fetch(`/api${path}`, {
     method: "POST",
     headers: {
       ...(isForm ? {} : { "Content-Type": "application/json" }),
@@ -42,14 +43,50 @@ export async function post<T>(path: string, body: object | FormData): Promise<T>
     },
     body: isForm ? body : JSON.stringify(body),
   })
+}
+
+async function failure(res: Response) {
   const data = await res.json().catch(() => ({}))
 
-  if (!res.ok) throw new ApiError(res.status, errorMessage(data, res.status))
+  return new ApiError(res.status, errorMessage(data, res.status))
+}
 
-  return data as T
+export async function post<T>(path: string, body: object | FormData): Promise<T> {
+  const res = await send(path, body)
+
+  if (!res.ok) throw await failure(res)
+
+  return (await res.json().catch(() => ({}))) as T
+}
+
+// For endpoints that stream newline-delimited JSON: calls onEvent for each line as it arrives
+export async function postStream<E>(path: string, body: object, onEvent: (event: E) => void) {
+  const res = await send(path, body)
+
+  if (!res.ok || !res.body) throw await failure(res)
+
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer = ""
+
+  for (;;) {
+    const { value, done } = await reader.read()
+
+    if (done) break
+    buffer += value
+    const lines = buffer.split("\n")
+
+    buffer = lines.pop() ?? "" // the last piece may be half a line: keep it for the next read
+    for (const line of lines) if (line.trim()) onEvent(JSON.parse(line))
+  }
+
+  if (buffer.trim()) onEvent(JSON.parse(buffer))
 }
 
 export type Document = { id: number; title: string; chunks: number }
 export type Source = { n: number; title: string; content: string }
-export type Answer = { answer: string; sources: Source[] }
+export type AskEvent =
+  | { type: "token"; text: string }
+  | { type: "done"; sources: Source[] }
+  | { type: "error"; message: string }
+export type SearchMode = "similarity" | "multi_query" | "hybrid"
 export type Turn = { role: "human" | "ai"; content: string }
