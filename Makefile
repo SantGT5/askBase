@@ -5,7 +5,6 @@ PY := backend/.venv/bin/python
 ifneq (,$(wildcard .env))
 	include .env
 	export
-	ENV_FILE_PARAM := --env-file .env
 endif
 
 BACKEND := http://127.0.0.1:$(or $(BACKEND_PORT),5001)
@@ -16,7 +15,7 @@ install:
 	uv venv --allow-existing backend/.venv
 	uv pip install --python $(PY) -r backend/requirements.txt
 
-# DB in the background, backend logs in this terminal (Ctrl+C stops the backend, data is kept)
+# Runs everything in the foreground (Ctrl+C stops it, data is kept)
 start:
 	docker compose up --build
 
@@ -33,3 +32,8 @@ url:
 	@echo "OpenAPI spec  $(BACKEND)/openapi.json"
 	@echo "Backend API   $(BACKEND)"
 	@echo "Postgres      postgresql://$(POSTGRES_USER):<password>@localhost:$(or $(POSTGRES_PORT),5432)/$(POSTGRES_DB)"
+
+format:
+	@echo "\nFormatting frontend code..."
+	@cd frontend && npm run format && npm run lint:fix
+.PHONY: format

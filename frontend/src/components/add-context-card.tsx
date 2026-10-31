@@ -1,5 +1,6 @@
 import { Loader2 } from "lucide-react"
-import { useState, type FormEvent } from "react"
+
+import { type FormEvent, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -7,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import { post, type Document } from "@/lib/api"
+import { type Document, post } from "@/lib/api"
 
 export function AddContextCard({ onError }: { onError: (err: unknown) => string }) {
   const [busy, setBusy] = useState(false)
@@ -16,11 +17,17 @@ export function AddContextCard({ onError }: { onError: (err: unknown) => string 
   async function submit(e: FormEvent<HTMLFormElement>, path: string, body: object | FormData) {
     e.preventDefault()
     const form = e.currentTarget
+
     setBusy(true)
     setStatus(null)
+
     try {
       const doc = await post<Document>(path, body)
-      setStatus({ ok: true, text: `Added "${doc.title}" (${doc.chunks} chunk${doc.chunks === 1 ? "" : "s"})` })
+
+      setStatus({
+        ok: true,
+        text: `Added "${doc.title}" (${doc.chunks} chunk${doc.chunks === 1 ? "" : "s"})`,
+      })
       form.reset()
     } catch (err) {
       setStatus({ ok: false, text: onError(err) })
@@ -52,7 +59,9 @@ export function AddContextCard({ onError }: { onError: (err: unknown) => string 
           <TabsContent value="text">
             <form
               className="flex flex-col gap-4 pt-2"
-              onSubmit={(e) => submit(e, "/documents/text", Object.fromEntries(new FormData(e.currentTarget)))}
+              onSubmit={e =>
+                submit(e, "/documents/text", Object.fromEntries(new FormData(e.currentTarget)))
+              }
             >
               <div className="flex flex-col gap-2">
                 <Label htmlFor="title">Title</Label>
@@ -67,7 +76,10 @@ export function AddContextCard({ onError }: { onError: (err: unknown) => string 
           </TabsContent>
 
           <TabsContent value="file">
-            <form className="flex flex-col gap-4 pt-2" onSubmit={(e) => submit(e, "/documents/upload", new FormData(e.currentTarget))}>
+            <form
+              className="flex flex-col gap-4 pt-2"
+              onSubmit={e => submit(e, "/documents/upload", new FormData(e.currentTarget))}
+            >
               <div className="flex flex-col gap-2">
                 <Label htmlFor="file">File (.pdf or .md, up to 10 MB)</Label>
                 <Input id="file" name="file" type="file" accept=".pdf,.md" required />
@@ -78,7 +90,10 @@ export function AddContextCard({ onError }: { onError: (err: unknown) => string 
         </Tabs>
 
         {status && (
-          <p role="status" className={status.ok ? "text-sm text-muted-foreground" : "text-sm text-destructive"}>
+          <p
+            role="status"
+            className={status.ok ? "text-sm text-muted-foreground" : "text-sm text-destructive"}
+          >
             {status.text}
           </p>
         )}

@@ -1,11 +1,17 @@
 {
-  "endOfLine": "lf",
   "semi": false,
-  "singleQuote": false,
   "tabWidth": 2,
+  "useTabs": false,
+  "endOfLine": "lf",
+  "printWidth": 100,
+  "singleQuote": false,
   "trailingComma": "es5",
-  "printWidth": 80,
-  "plugins": ["prettier-plugin-tailwindcss"],
-  "tailwindStylesheet": "src/index.css",
-  "tailwindFunctions": ["cn", "cva"]
+  "arrowParens": "avoid",
+  "bracketSpacing": true,
+  "quoteProps": "as-needed",
+  "importOrderSeparation": true,
+  "importOrderSortSpecifiers": true,
+  "importOrderCaseInsensitive": true,
+  "plugins": ["@trivago/prettier-plugin-sort-imports"],
+  "importOrder": ["^react$", "^@/(.*)$", "^[./]"]
 }

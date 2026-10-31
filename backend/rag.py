@@ -18,7 +18,7 @@ PROVIDERS = {
     "deepseek": {"base_url": "https://api.deepseek.com", "model": "deepseek-flash"},
     "glm": {"base_url": "https://api.z.ai/api/paas/v4", "model": "glm-4.7-flash"},  # free tier
 }
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER") or "claude"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER") or "glm"
 if LLM_PROVIDER not in PROVIDERS:
     raise RuntimeError(f"LLM_PROVIDER must be one of {', '.join(PROVIDERS)}, got {LLM_PROVIDER!r}")
 LLM_MODEL = os.environ.get("LLM_MODEL") or PROVIDERS[LLM_PROVIDER]["model"]

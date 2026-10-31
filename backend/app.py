@@ -18,7 +18,7 @@ TOKEN_MAX_AGE = 24 * 3600  # seconds
 
 app = APIFlask(__name__, title="askBase API", version="0.1.0")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY")
-if not app.config["SECRET_KEY"]:  # an empty key would let anyone forge login tokens
+if app.config["SECRET_KEY"] in (None, "", "change-me"):  # an empty or public key would let anyone forge login tokens
     raise RuntimeError("SECRET_KEY is not set in .env")
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # upload limit
 

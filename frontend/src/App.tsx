@@ -1,4 +1,5 @@
 import { LogOut } from "lucide-react"
+
 import { useState } from "react"
 
 import { AddContextCard } from "@/components/add-context-card"
@@ -19,6 +20,7 @@ export function App() {
   // Shared by the cards: an expired/invalid token sends the user back to the login screen
   function handleError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) login(null)
+
     return (err as Error).message
   }
 

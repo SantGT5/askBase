@@ -21,11 +21,13 @@ type ErrorBody = { message?: string; detail?: Record<string, Record<string, stri
 
 function errorMessage(body: ErrorBody, status: number) {
   const fields = body.detail?.json ?? body.detail?.files
+
   if (fields) {
     return Object.entries(fields)
       .map(([field, problems]) => `${field}: ${problems.join(" ")}`)
       .join("; ")
   }
+
   return body.message ?? `Request failed (${status})`
 }
 
@@ -41,7 +43,9 @@ export async function post<T>(path: string, body: object | FormData): Promise<T>
     body: isForm ? body : JSON.stringify(body),
   })
   const data = await res.json().catch(() => ({}))
+
   if (!res.ok) throw new ApiError(res.status, errorMessage(data, res.status))
+
   return data as T
 }
 

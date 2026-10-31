@@ -1,10 +1,11 @@
 import { Loader2, Send } from "lucide-react"
-import { useState, type FormEvent } from "react"
+
+import { type FormEvent, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { post, type Answer } from "@/lib/api"
+import { type Answer, post } from "@/lib/api"
 
 export function AskCard({ onError }: { onError: (err: unknown) => string }) {
   const [busy, setBusy] = useState(false)
@@ -14,8 +15,10 @@ export function AskCard({ onError }: { onError: (err: unknown) => string }) {
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const { question } = Object.fromEntries(new FormData(e.currentTarget))
+
     setBusy(true)
     setError("")
+
     try {
       setResult(await post<Answer>("/ask", { question }))
     } catch (err) {
@@ -33,7 +36,13 @@ export function AskCard({ onError }: { onError: (err: unknown) => string }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
         <form onSubmit={submit} className="flex gap-2">
-          <Input name="question" aria-label="Question" placeholder="What would you like to know?" maxLength={2000} required />
+          <Input
+            name="question"
+            aria-label="Question"
+            placeholder="What would you like to know?"
+            maxLength={2000}
+            required
+          />
           <Button type="submit" disabled={busy}>
             {busy ? <Loader2 className="animate-spin" /> : <Send />}
             Ask
@@ -54,7 +63,7 @@ export function AskCard({ onError }: { onError: (err: unknown) => string }) {
                 <div className="flex flex-col gap-3">
                   <h3 className="text-sm font-medium text-muted-foreground">Sources</h3>
                   <ol className="flex flex-col gap-3">
-                    {result.sources.map((s) => (
+                    {result.sources.map(s => (
                       <li key={s.n} className="rounded-lg border p-3 text-sm">
                         <p className="font-medium">
                           [{s.n}] {s.title}

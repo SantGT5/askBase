@@ -1,5 +1,6 @@
 import { Loader2 } from "lucide-react"
-import { useState, type FormEvent } from "react"
+
+import { type FormEvent, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -16,11 +17,14 @@ export function AuthCard({ onLogin }: { onLogin: (token: string) => void }) {
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const creds = Object.fromEntries(new FormData(e.currentTarget))
+
     setBusy(true)
     setError("")
+
     try {
       if (mode === "register") await post("/auth/register", creds)
       const { token } = await post<{ token: string }>("/auth/login", creds)
+
       onLogin(token)
     } catch (err) {
       setError((err as Error).message)
@@ -36,7 +40,7 @@ export function AuthCard({ onLogin }: { onLogin: (token: string) => void }) {
         <CardDescription>Your documents are private to your account.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <Tabs value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
+        <Tabs value={mode} onValueChange={v => setMode(v as typeof mode)}>
           <TabsList className="w-full">
             <TabsTrigger value="login">Log in</TabsTrigger>
             <TabsTrigger value="register">Register</TabsTrigger>
